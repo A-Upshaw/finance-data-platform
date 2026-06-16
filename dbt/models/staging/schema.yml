@@ -1,0 +1,31 @@
+version: 2
+
+sources:
+  - name: public
+    database: postgres
+    schema: public
+    tables:
+      - name: price_history
+        description: "Raw daily OHLCV data from Polygon.io, one row per ticker per date"
+        columns:
+          - name: ticker
+            tests: [not_null]
+          - name: date
+            tests: [not_null]
+          - name: close
+            tests: [not_null]
+      - name: stocks
+        description: "Reference table: one row per ticker with sector and metadata"
+      - name: portfolio
+        description: "Your positions: one row per buy lot with cost basis"
+
+models:
+  - name: stg_price_history
+    description: "Cleaned price history — nulls removed, types explicit"
+    columns:
+      - name: ticker
+        tests: [not_null]
+      - name: date
+        tests: [not_null]
+      - name: close
+        tests: [not_null]
