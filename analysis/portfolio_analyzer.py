@@ -87,8 +87,8 @@ def run_tool(tool_name, tool_input, supabase):
         return result.data
 
 
-def analyze(question: str):
-    system = SYSTEM_PROMPT.format(date=date.today().isoformat)
+def analyze(question: str) -> str:
+    system = SYSTEM_PROMPT.format(date=date.today().isoformat())
     messages = [{"role": "user", "content": question}]
 
     while True:
@@ -100,12 +100,12 @@ def analyze(question: str):
             messages=messages,
         )
 
-        # Claude is done — print the answer
+        # Claude is done — return the answer
         if response.stop_reason == "end_turn":
             for block in response.content:
                 if hasattr(block, "text"):
-                    print(f"\nAnalyst: {block.text}\n")
-            break
+                    return block.text
+            return ""
 
         # Claude wants to call tools — execute each one
         messages.append({"role": "assistant", "content": response.content})
@@ -113,7 +113,6 @@ def analyze(question: str):
         tool_results = []
         for block in response.content:
             if block.type == "tool_use":
-                print(f"  [fetching {block.name}...]")
                 data = run_tool(block.name, block.input, supabase)
                 tool_results.append({
                     "type": "tool_result",

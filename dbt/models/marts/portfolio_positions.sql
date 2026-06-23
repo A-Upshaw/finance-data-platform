@@ -19,6 +19,7 @@ current_prices as(
 
 select
     p.account,
+    s.company,
     p.ticker,
     cp.current_price,
     cp.price_date,
@@ -30,5 +31,6 @@ select
     round((cp.current_price - p.purchase_price)/ p.purchase_price * 100,2) as unrealized_gain_loss_pct 
 from {{ ref('stg_portfolio') }} p
 left join current_prices cp on p.ticker = cp.ticker
+left join stocks s on p.ticker = s.ticker
 
 
