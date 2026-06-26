@@ -2,17 +2,19 @@
 
 A personal finance data platform built on a modern data stack.
 
-Pulls daily stock prices, transforms the data with dbt, and uses the Claude API 
-to answer questions about the portfolio against live data.
+Pulls daily stock prices, transforms the data with dbt, serves it through a FastAPI 
+layer, and renders a live portfolio dashboard. Claude API analyzer answers questions 
+against live data using tool use.
 
 ---
 
 ## What It Does
 
 - Fetches daily prices for 560+ stocks from Polygon.io and loads them into Supabase
-- dbt models clean and transform the raw data into portfolio-level metrics
-- Claude API portfolio analyzer uses tool use to answer real questions: 
-  "Why is my portfolio down today?" "What's my biggest risk?"
+- dbt staging and mart models clean and transform the raw data into portfolio metrics
+- FastAPI serves the transformed data including a SPY benchmark endpoint
+- Streamlit dashboard calls the API to render live portfolio positions and KPIs
+- Claude API portfolio analyzer uses tool use to answer questions against live data
 - GitHub Actions runs the price fetch automatically every weekday at market close
 
 ---
@@ -24,14 +26,32 @@ to answer questions about the portfolio against live data.
 | Data source | Polygon.io |
 | Database | Supabase (PostgreSQL) |
 | Transformation | dbt |
+| API | FastAPI |
+| Dashboard | Streamlit |
 | AI layer | Claude API with tool use |
 | Automation | GitHub Actions |
 | Language | Python |
 
 ---
 
+## Project Structure
+
+ingestion/          # Daily price fetcher and backfill script
+dbt/                # Staging models and portfolio marts
+api/                # FastAPI service
+dashboard/          # Streamlit portfolio dashboard
+analysis/           # Claude API portfolio analyzer
+.github/workflows/  # Automated daily pipeline
+schema/             # Database schema
+
+
+
+---
+
 ## Status
 
-Active build. Ingestion and dbt layer complete. Claude API analyzer in progress.
+Active build. Ingestion, dbt layer, FastAPI, and dashboard complete. 
+Claude API analyzer in progress.
+
 
 
