@@ -15,18 +15,19 @@ POLYGON_API_KEY = os.environ['POLYGON_API_KEY']
 def get_target_dates():
     """
     Return list of dates to fetch.
-    Monday: fetch Friday (catch-up) + today (new data).
-    All other weekdays: just today.
-    Weekends: most recent Friday only.
+    Polygon's free Basic plan never serves "today's" grouped data on the
+    same calendar day (it 403s with NOT_AUTHORIZED regardless of time) —
+    same-day data only becomes available starting the next calendar day.
+    So we always target the most recently completed trading day.
     """
     today = date.today()
-    if today.weekday() == 5:   # Saturday
+    if today.weekday() == 5:    # Saturday — last close was Friday
         return [today - timedelta(days=1)]
-    if today.weekday() == 6:   # Sunday
+    if today.weekday() == 6:    # Sunday — last close was Friday
         return [today - timedelta(days=2)]
-    if today.weekday() == 0:   # Monday — get Friday + today
-        return [today - timedelta(days=3), today]
-    return [today]
+    if today.weekday() == 0:    # Monday — last close was Friday
+        return [today - timedelta(days=3)]
+    return [today - timedelta(days=1)]
 
 
 def fetch_tickers(supabase):
