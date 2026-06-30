@@ -1,6 +1,7 @@
 import os
 import sys
 import re
+import requests
 import streamlit as st
 import plotly.express as px
 import pandas as pd
@@ -99,10 +100,62 @@ def load_sector_exposure():
 def load_vs_spy():
     return supabase.table("portfolio_vs_spy").select("*").execute().data
 
+@st.cache_data(ttl=300)
+def load_movers():
+    return supabase.table("market_movers").select("*").execute().data
+
+@st.cache_data(ttl=3600)
+def load_enterprise_values():
+    rows = supabase.table("fundamentals").select("ticker,enterprise_value").execute().data
+    return {r["ticker"]: r["enterprise_value"] for r in rows if r["enterprise_value"]}
+
+@st.cache_data(ttl=300)
+def load_news(ticker=None, limit=20):
+    params = {
+        "apiKey": os.environ["POLYGON_API_KEY"],
+        "limit":  limit,
+        "order":  "desc",
+        "sort":   "published_utc",
+    }
+    if ticker:
+        params["ticker.any_of"] = ticker
+    resp = requests.get("https://api.polygon.io/v2/reference/news", params=params, timeout=10)
+    resp.raise_for_status()
+    return resp.json().get("results", [])
+
+@st.cache_data(ttl=3600)
+def load_indicators():
+    fred_key = os.environ["FRED_API_KEY"]
+    series_map = {
+        "Fed Funds Rate": ("FEDFUNDS", "%"),
+        "CPI (Index)":    ("CPIAUCSL", ""),
+        "GDP ($B)":       ("GDP", "$B"),
+        "Unemployment":   ("UNRATE", "%"),
+    }
+    result = {}
+    for label, (series_id, unit) in series_map.items():
+        resp = requests.get(
+            "https://api.stlouisfed.org/fred/series/observations",
+            params={
+                "series_id":  series_id,
+                "api_key":    fred_key,
+                "file_type":  "json",
+                "limit":      24,
+                "sort_order": "desc",
+            },
+            timeout=10,
+        )
+        resp.raise_for_status()
+        obs = [o for o in resp.json()["observations"] if o["value"] != "."]
+        obs.sort(key=lambda o: o["date"])
+        result[label] = {"unit": unit, "observations": obs}
+    return result
+
 summary  = load_summary()
 positions = pd.DataFrame(load_positions())
 sectors   = pd.DataFrame(load_sector_exposure())
 vs_spy    = pd.DataFrame(load_vs_spy())
+movers    = pd.DataFrame(load_movers())
 
 # Header
 st.markdown("""
@@ -331,14 +384,139 @@ with tab2:
 # Tab 3: Market Movers
 with tab3:
     st.subheader("Market Movers")
-    st.info("Coming soon — top gainers and losers from your 560-ticker universe.")
+
+    if movers.empty:
+        st.info("No mover data yet — run `dbt run` after the next price fetch.")
+    else:
+        st.caption(f"As of {movers['date'].max()} · {len(movers)} tickers")
+
+        ev_map = load_enterprise_values()
+        movers["size_metric"] = movers["ticker"].map(ev_map)
+        movers.loc[movers["size_metric"] <= 0, "size_metric"] = None
+        movers["size_metric"] = movers["size_metric"].fillna(movers["size_metric"].median())
+        movers["sector"] = movers["sector"].fillna("Other")
+        # Pre-format as a plain string — passing the raw float through customdata into a
+        # d3-format texttemplate produced garbled output (e.g. "5.7099999999999999%") for
+        # some values due to a float round-trip precision quirk.
+        movers["change_label"] = movers["change_pct"].apply(lambda x: f"{x:+.2f}%")
+
+        HEATMAP_SCALE = [
+            [0.00, "#8b0000"], [0.25, "#d73027"], [0.45, "#fdae61"],
+            [0.50, "#fffabf"],
+            [0.55, "#a6d96a"], [0.75, "#1a9850"], [1.00, "#00441b"],
+        ]
+        fig_heat = px.treemap(
+            movers,
+            path=[px.Constant("S&P Universe"), "sector", "ticker"],
+            values="size_metric",
+            color="change_pct",
+            color_continuous_scale=HEATMAP_SCALE,
+            color_continuous_midpoint=0,
+            range_color=[-4, 4],
+            custom_data=["company", "close", "change_label"],
+        )
+
+        # Plotly auto-colors sector/root headers by averaging their children's color —
+        # a mixed sector averages back to ~0, landing on the same pale yellow as a flat
+        # stock. Override headers (depth 0-1 ids) to a fixed dark band; leave leaf
+        # tickers (depth 2) on the data-driven scale.
+        from plotly.colors import sample_colorscale
+        change_by_ticker = movers.set_index("ticker")["change_pct"].to_dict()
+        node_colors = []
+        for node_id, label in zip(fig_heat.data[0].ids, fig_heat.data[0].labels):
+            if node_id.count("/") == 2:
+                t = (max(-4, min(4, change_by_ticker.get(label, 0))) + 4) / 8
+                node_colors.append(sample_colorscale(HEATMAP_SCALE, [t])[0])
+            else:
+                node_colors.append("#2c2f38")
+
+        fig_heat.update_traces(
+            texttemplate="<b>%{label}</b><br>%{customdata[2]}",
+            textfont=dict(family="Inter, sans-serif", size=13, color="white"),
+            hovertemplate="<b>%{customdata[0]}</b><br>Close: $%{customdata[1]:,.2f}<br>Change: %{customdata[2]}<extra></extra>",
+            marker=dict(colors=node_colors, line=dict(width=1, color="white")),
+        )
+        fig_heat.update_layout(
+            margin=dict(t=10, b=10, l=10, r=10),
+            height=550,
+            coloraxis_showscale=False,
+        )
+        st.plotly_chart(fig_heat, use_container_width=True)
+
+        st.markdown("---")
+
+        sector_options = ["All"] + sorted(movers["sector"].unique().tolist())
+        selected_sector = st.selectbox("Sector", sector_options)
+        movers_view = movers if selected_sector == "All" else movers[movers["sector"] == selected_sector]
+
+        def style_movers(df):
+            disp = df[["ticker", "company", "sector", "close", "change_dollars", "change_pct", "volume"]].copy()
+            disp.columns = ["Ticker", "Company", "Sector", "Close", "Change ($)", "Change (%)", "Volume"]
+            return disp.style.map(color_pnl_cell, subset=["Change ($)", "Change (%)"]).format({
+                "Close":      "${:,.2f}",
+                "Change ($)": "${:,.2f}",
+                "Change (%)": "{:.2f}%",
+                "Volume":     "{:,.0f}",
+            })
+
+        col1, col2 = st.columns(2)
+        with col1:
+            st.markdown("**Top Gainers**")
+            gainers = movers_view.sort_values("change_pct", ascending=False).head(10)
+            st.dataframe(style_movers(gainers), use_container_width=True, hide_index=True)
+        with col2:
+            st.markdown("**Top Losers**")
+            losers = movers_view.sort_values("change_pct", ascending=True).head(10)
+            st.dataframe(style_movers(losers), use_container_width=True, hide_index=True)
 
 # Tab 4: News
 with tab4:
     st.subheader("News")
-    st.info("Coming soon — latest news for your portfolio tickers via Polygon.io.")
+
+    news_ticker = st.text_input("Filter by ticker (optional)", placeholder="e.g. AAPL").strip().upper()
+    articles = load_news(ticker=news_ticker or None)
+
+    if not articles:
+        st.info("No news articles found.")
+    else:
+        for article in articles:
+            published = article.get("published_utc", "")[:10]
+            publisher = article.get("publisher", {}).get("name", "Unknown")
+            tickers   = ", ".join(article.get("tickers", [])[:5])
+            st.markdown(f"""
+            <div class="kpi-card" style="border-left-color:#4c9be8;">
+                <div style="font-weight:700; font-size:1rem; margin-bottom:4px;">
+                    <a href="{article.get('article_url', '#')}" target="_blank" style="text-decoration:none; color:#1a1f2e;">{article.get('title', 'Untitled')}</a>
+                </div>
+                <div style="font-size:0.8rem; color:#7a8599;">{publisher} · {published} · {tickers}</div>
+            </div>
+            """, unsafe_allow_html=True)
 
 # Tab 5: Economic Indicators
 with tab5:
     st.subheader("Economic Indicators")
-    st.info("Coming soon — GDP, inflation, Fed funds rate, and unemployment via FRED API.")
+
+    indicators = load_indicators()
+    col1, col2 = st.columns(2)
+    cols = [col1, col2, col1, col2]
+
+    for (label, data), col in zip(indicators.items(), cols):
+        obs = data["observations"]
+        if not obs:
+            continue
+        df_obs = pd.DataFrame(obs)
+        df_obs["date"] = pd.to_datetime(df_obs["date"])
+        df_obs["value"] = df_obs["value"].astype(float)
+
+        latest = df_obs.iloc[-1]
+        with col:
+            fig = px.line(
+                df_obs, x="date", y="value",
+                title=f"{label} — latest {latest['value']:,.2f}{data['unit']}",
+                template=CHART_TEMPLATE,
+                labels={"value": label, "date": ""},
+                color_discrete_sequence=["#4c9be8"],
+            )
+            fig.update_traces(line=dict(width=2.5))
+            fig.update_layout(font=CHART_FONT, height=300, margin=dict(t=40, b=10, l=10, r=10))
+            st.plotly_chart(fig, use_container_width=True)
