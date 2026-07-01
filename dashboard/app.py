@@ -207,7 +207,7 @@ def add_portfolio_lot(ticker, account, shares, purchase_price, purchase_date):
         n = backfill_ticker_prices(ticker)
         new_ticker_msg = f"Added {ticker} to the universe with {n} days of history. "
 
-    try:
+    try: 
         supabase.table("portfolio").insert({
             "ticker":         ticker,
             "account":        account.strip(),
@@ -218,8 +218,47 @@ def add_portfolio_lot(ticker, account, shares, purchase_price, purchase_date):
         return True, f"{new_ticker_msg}Added {shares} shares of {ticker} at ${purchase_price:.2f} ({account})."
     except Exception as e:
         return False, f"Insert failed: {e}"
+    
+def add_sale(ticker, account, shares, sale_price, sale_date):
+    ticker = ticker.upper().strip()
+
+    result = supabase.table("portfolio").select("shares").eq("ticker", ticker).eq("account", account).execute()
+    total_held = sum(row["shares"] for row in result.data)
+    
 
 
+    if total_held == 0:
+        return False, f"No {ticker} position found in {account}."
+    if shares > total_held:
+        return False, f"Can't sell {shares} shares only {total_held} held in {account}."
+    try: #Insert Sale
+        supabase.table("sales").insert({
+            "ticker":     ticker,
+            "account":    account.strip(),
+            "shares":     float(shares),
+            "sale_price": float(sale_price),
+            "sale_date":  sale_date.isoformat(),
+        }).execute()
+        # FIFO deduction from portfolio lots
+        lots = supabase.table("portfolio").select("id", "shares").eq("ticker", ticker).eq("account", account).order("purchase_date", desc=False).execute().data
+        shares_remaining = float(shares)
+        for lot in lots:
+            if shares_remaining <= 0:
+                break
+            if lot["shares"] <= shares_remaining:
+                shares_remaining -= lot["shares"]
+                supabase.table("portfolio").delete().eq("id", lot["id"]).execute()
+            else:
+                supabase.table("portfolio").update({"shares": lot["shares"] - shares_remaining}).eq("id", lot["id"]).execute()
+                shares_remaining = 0
+        #only return success after both steps complete 
+        return True, f"Recorded sale of {shares} shares of {ticker} at ${sale_price:.2f} ({account})."
+    except Exception as e:
+        return False, f"Insert failed: {e}"
+    
+
+
+    
 
 summary  = load_summary()
 positions = pd.DataFrame(load_positions())
@@ -256,7 +295,7 @@ st.markdown(ticker_html, unsafe_allow_html=True)
 
 st.markdown("---")
 # add tabs 
-tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["Portfolio Summary", "Positions", "Market Movers", "News", "Economic Indicators", "Add Position"])
+tab1, tab2, tab3, tab4, tab5 = st.tabs(["Portfolio Summary", "Positions", "Market Movers", "News", "Economic Indicators"])
 
 # Tab 1: Portfolio Summary
 with tab1:
@@ -454,6 +493,78 @@ with tab2:
         height=500,
     )
 
+    with st.expander("Add Position"):
+        st.subheader("Add Position")
+
+        with st.form("add_lot_form", clear_on_submit=True):
+            col1, col2 = st.columns(2)
+            with col1:
+                ticker_input  = st.text_input("Ticker Symbol", placeholder="e.g. AAPL")
+                shares_input  = st.number_input("Shares", min_value=0.0001, value=1.0, step=1.0, format="%.4f")
+                account_input = st.text_input("Account", placeholder="e.g. Robinhood, Webull")
+            with col2:
+                price_input = st.number_input("Purchase Price ($)", min_value=0.01, value=100.0, step=0.01, format="%.2f")
+                date_input  = st.date_input("Purchase Date", value=date.today(), max_value=date.today())
+            submitted = st.form_submit_button("Add to Portfolio", type="primary", use_container_width=True)
+
+        if submitted:
+            errors = []
+            if not ticker_input.strip():
+                errors.append("Ticker is required.")
+            if shares_input <= 0:
+                errors.append("Shares must be greater than 0.")
+            if price_input <= 0:
+                errors.append("Purchase price must be greater than 0.")
+            if not account_input.strip():
+                errors.append("Account is required.")
+
+            if errors:
+                for err in errors:
+                    st.error(err)
+            else:
+                with st.spinner(f"Adding {ticker_input.upper()}..."):
+                    success, msg = add_portfolio_lot(ticker_input, account_input, shares_input, price_input, date_input)
+            if success:
+                    st.success(msg)
+                    st.info("Run `dbt run` to refresh P&L calculations for this new lot.")
+                    st.cache_data.clear()
+            else:
+                    st.error(msg)
+
+    with st.expander("Sell Position"):
+        st.subheader("Sell Position")
+        with st.form("sell_lot_form", clear_on_submit=True):
+            col1, col2 = st.columns(2)
+            with col1:
+                ticker_input = st.selectbox("Ticker", positions["ticker"].sort_values().unique().tolist())
+                account_input = st.text_input("Account", placeholder="e.g. Robinhood, Webull" )
+                shares_input = st.number_input("Shares", min_value=0.0001, value=1.0, step=1.0, format="%.4f")
+            with col2:
+                price_input = st.number_input("Sale Price ($)", min_value=0.01, value=100.0, step=0.01, format="%.2f")
+                date_input  = st.date_input("Sale Date", value=date.today(), max_value=date.today())
+            submitted = st.form_submit_button("Sale Portfolio Position", type="primary", use_container_width=True)
+
+        if submitted:
+            errors = []
+            if shares_input <= 0:
+                errors.append("Shares must be greater than 0.")
+            if price_input <= 0:
+                errors.append("Purchase price must be greater than 0.")
+            if not account_input.strip():
+                errors.append("Account is required.")
+
+            if errors:
+                for err in errors:
+                    st.error(err)
+            else:
+                with st.spinner(f"Recording sale of {ticker_input.upper()}..."):
+                    success, msg = add_sale(ticker_input, account_input, shares_input, price_input, date_input)
+            if success:
+                st.success(msg)
+                st.info("The sale is recorded, dbt refresh to capture sale")
+                st.cache_data.clear()
+            else:
+                st.error(msg)
 # Tab 3: Market Movers
 with tab3:
     st.subheader("Market Movers")
@@ -594,42 +705,3 @@ with tab5:
             fig.update_layout(font=CHART_FONT, height=300, margin=dict(t=40, b=10, l=10, r=10))
             st.plotly_chart(fig, use_container_width=True)
 
-# Tab 6: Add Positions
-with tab6:
-    st.subheader("Add Position")
-    st.caption("Tickers outside our 560-stock universe are fetched from Polygon and backfilled automatically.")
-
-    with st.form("add_lot_form", clear_on_submit=True):
-        col1, col2 = st.columns(2)
-        with col1:
-            ticker_input  = st.text_input("Ticker Symbol", placeholder="e.g. AAPL")
-            shares_input  = st.number_input("Shares", min_value=0.0001, value=1.0, step=1.0, format="%.4f")
-            account_input = st.text_input("Account", placeholder="e.g. Robinhood, Webull")
-        with col2:
-            price_input = st.number_input("Purchase Price ($)", min_value=0.01, value=100.0, step=0.01, format="%.2f")
-            date_input  = st.date_input("Purchase Date", value=date.today(), max_value=date.today())
-        submitted = st.form_submit_button("Add to Portfolio", type="primary", use_container_width=True)
-
-    if submitted:
-        errors = []
-        if not ticker_input.strip():
-            errors.append("Ticker is required.")
-        if shares_input <= 0:
-            errors.append("Shares must be greater than 0.")
-        if price_input <= 0:
-            errors.append("Purchase price must be greater than 0.")
-        if not account_input.strip():
-            errors.append("Account is required.")
-
-        if errors:
-            for err in errors:
-                st.error(err)
-        else:
-            with st.spinner(f"Adding {ticker_input.upper()}..."):
-                success, msg = add_portfolio_lot(ticker_input, account_input, shares_input, price_input, date_input)
-            if success:
-                st.success(msg)
-                st.info("Run `dbt run` to refresh P&L calculations for this new lot.")
-                st.cache_data.clear()
-            else:
-                st.error(msg)
