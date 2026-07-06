@@ -4,7 +4,7 @@ A Portfolio Analyzer built on a modern data stack.
 
 Pulls daily stock prices, transforms the data with dbt, and renders a live
 portfolio dashboard directly from Supabase/Polygon/FRED. A Claude API analyzer
-answers natural-language questions against the same live data using tool use.
+answers questions against the same live data using tool use.
 
 ---
 
@@ -16,7 +16,7 @@ answers natural-language questions against the same live data using tool use.
   positions, KPIs, sector exposure, market movers, news, and economic indicators
 - Claude API portfolio analyzer uses tool use to answer questions against live data,
   with multi-turn conversation history
-- Add/Sell Position forms write directly to Supabase — new tickers are
+- Add/Sell Position forms write directly to Supabase; new tickers are
   auto-registered and backfilled with price history via Polygon
 - Realized P&L mart tracks per-sale gains using weighted average cost basis
 - GitHub Actions runs the price fetch and `dbt run` automatically every weekday
