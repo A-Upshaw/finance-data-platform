@@ -102,6 +102,10 @@ def load_vs_spy():
     return supabase.table("portfolio_vs_spy").select("*").execute().data
 
 @st.cache_data(ttl=300)
+def load_realized_pnl():
+    return supabase.table("realized_pnl").select("*").execute().data
+
+@st.cache_data(ttl=300)
 def load_movers():
     return supabase.table("market_movers").select("*").execute().data
 
@@ -264,6 +268,7 @@ summary  = load_summary()
 positions = pd.DataFrame(load_positions())
 sectors   = pd.DataFrame(load_sector_exposure())
 vs_spy    = pd.DataFrame(load_vs_spy())
+realized  = pd.DataFrame(load_realized_pnl())
 movers    = pd.DataFrame(load_movers())
 
 # Header
@@ -335,6 +340,28 @@ with tab1:
             <div class="kpi-label">Worst Performer</div>
             <div class="kpi-value">{worst_row['ticker']}</div>
             <div class="kpi-delta" style="color:#e74c3c">▼ {abs(worst_row['unrealized_gain_loss_pct'])}%</div>
+        </div>""", unsafe_allow_html=True)
+
+    total_realized_pnl = round(realized["realized_gain_loss"].sum(), 2) if not realized.empty else 0.0
+    total_return_dollars = round(pnl + total_realized_pnl, 2)
+    total_return_pct = round((total_return_dollars / summary["total_cost_basis"]) * 100, 2) if summary["total_cost_basis"] else 0.0
+    realized_color = "#27ae60" if total_realized_pnl >= 0 else "#e74c3c"
+    realized_arrow = "▲" if total_realized_pnl >= 0 else "▼"
+    total_return_color = "#27ae60" if total_return_dollars >= 0 else "#e74c3c"
+    total_return_arrow = "▲" if total_return_dollars >= 0 else "▼"
+
+    col6, col7 = st.columns(2)
+    with col6:
+        st.markdown(f"""<div class="kpi-card">
+            <div class="kpi-label">Realized P&L</div>
+            <div class="kpi-value">${total_realized_pnl:,.2f}</div>
+            <div class="kpi-delta" style="color:{realized_color}">{realized_arrow} from {len(realized)} closed sale{'s' if len(realized) != 1 else ''}</div>
+        </div>""", unsafe_allow_html=True)
+    with col7:
+        st.markdown(f"""<div class="kpi-card">
+            <div class="kpi-label">Total Return (Unrealized + Realized)</div>
+            <div class="kpi-value">${total_return_dollars:,.2f}</div>
+            <div class="kpi-delta" style="color:{total_return_color}">{total_return_arrow} {total_return_pct}%</div>
         </div>""", unsafe_allow_html=True)
 
     st.caption(f"As of {summary['as_of_date']}")
