@@ -1,0 +1,42 @@
+name: Refresh Marts
+
+on:
+  workflow_dispatch:
+
+jobs:
+  dbt-run:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4.2.2
+
+      - name: Set up Python
+        uses: actions/setup-python@v5.6.0
+        with:
+          python-version: '3.12'
+
+      - name: Install dbt
+        run: pip install dbt-core dbt-postgres
+
+      - name: Create dbt profile
+        run: |
+          mkdir -p ~/.dbt
+          cat > ~/.dbt/profiles.yml << 'EOF'
+          finance_platform:
+            target: dev
+            outputs:
+              dev:
+                type: postgres
+                host: aws-1-us-east-1.pooler.supabase.com
+                port: 5432
+                user: postgres.uiocdjtwshxpqtlcgfel
+                sslmode: require
+                password: ${{ secrets.SUPABASE_DB_PASSWORD }}
+                dbname: postgres
+                schema: public
+                threads: 1
+          EOF
+
+      - name: Run dbt
+        run: dbt run --project-dir dbt/ --profiles-dir ~/.dbt

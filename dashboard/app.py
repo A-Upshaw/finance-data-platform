@@ -198,6 +198,27 @@ def backfill_ticker_prices(ticker, lookback_days=365):
         supabase.table("price_history").upsert(rows, on_conflict="ticker,date").execute()
     return len(rows)
 
+GITHUB_REPO = "A-Upshaw/finance-data-platform"
+
+def trigger_marts_refresh():
+    """Fires the refresh_marts.yml GitHub Actions workflow (dbt run) so P&L
+    marts pick up a trade immediately instead of waiting for the 4:30pm cron."""
+    token = os.environ.get("GITHUB_TOKEN")
+    if not token:
+        return False, "GITHUB_TOKEN not set in .env — skipping auto-refresh, run `dbt run` manually."
+    resp = requests.post(
+        f"https://api.github.com/repos/{GITHUB_REPO}/actions/workflows/refresh_marts.yml/dispatches",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/vnd.github+json",
+        },
+        json={"ref": "main"},
+        timeout=10,
+    )
+    if resp.status_code == 204:
+        return True, "Marts refresh triggered — new numbers will land in ~30s."
+    return False, f"Failed to trigger marts refresh ({resp.status_code}): {resp.text}"
+
 def add_portfolio_lot(ticker, account, shares, purchase_price, purchase_date):
     ticker = ticker.upper().strip()
     new_ticker_msg = ""
@@ -553,7 +574,8 @@ with tab2:
                     success, msg = add_portfolio_lot(ticker_input, account_input, shares_input, price_input, date_input)
             if success:
                     st.success(msg)
-                    st.info("Run `dbt run` to refresh P&L calculations for this new lot.")
+                    refreshed, refresh_msg = trigger_marts_refresh()
+                    (st.info if refreshed else st.warning)(refresh_msg)
                     st.cache_data.clear()
             else:
                     st.error(msg)
@@ -588,7 +610,8 @@ with tab2:
                     success, msg = add_sale(ticker_input, account_input, shares_input, price_input, date_input)
             if success:
                 st.success(msg)
-                st.info("The sale is recorded, dbt refresh to capture sale")
+                refreshed, refresh_msg = trigger_marts_refresh()
+                (st.info if refreshed else st.warning)(refresh_msg)
                 st.cache_data.clear()
             else:
                 st.error(msg)
